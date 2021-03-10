@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test</title>
+</head>
+<style>
+    input {
+        width: 80%;
+    }
+    textarea {
+        width: 80%;
+        height: 100px;
+    }
+</style>
+<body>
+
+<div id="app">
+
+    <div v-show="procedure >= 1">
+        <pre>第一步: 调用 {{this.getServerPublicKeyUrl}} 获取服务器公钥</pre>
+        <pre>服务器公钥: </pre>
+        <pre>{{this.ServerPublicKey}}</pre>
+        <button v-if="procedure === 1" @click="getServerPublicKey">获取</button>
+    </div>
+
+    <br />
+
+    <div v-show="procedure >= 2">
+        <pre>第二步: 生成16个字节的随机字符串(客户端密钥)和16个字节的随机字符串(偏移量)</pre>
+        <pre>随机字符串: </pre>
+        <pre>{{this.secretKey}}</pre>
+        <pre>偏移量: </pre>
+        <pre>{{this.iv}}</pre>
+        <pre>准备发送到后端的json数据</pre>
+        <pre>{"secretKey":"{{this.secretKey}}","iv":"{{this.iv}}"}</pre>
+        <button v-if="procedure === 2" @click="generateRandomSecretKey">生成</button>
+    </div>
+
+    <br />
+
+    <div v-show="procedure >= 3">
+        <pre>第三步: 使用服务器公钥加密客户端密钥获得密文, 调用 {{this.saveClientSecretKeyUrl}} 发送密文, 接收返回secretKeyId</pre>
+        <pre>密文: </pre>
+        <pre>{{this.clientSecretKey}}</pre>
+        <pre>secretKeyId: </pre>
+        <per>{{this.secretKeyId}}</per>
+        <button v-if="procedure === 3" @click="saveClientSecretKey">发送</button>
+    </div>
+
+    <br />
+
+    <div v-show="procedure >= 4">
+        <pre>第三步: 使用客户端密钥加密字符串得到密文并调用 {{this.saveContextUrl}} 将密文发送到服务器</pre>
+        <pre>字符串: </pre>
+        <pre>{"context":"测试字符串!"}</pre>
+        <pre>密文: </pre>
+        <pre>{{this.sendCiphertext}}</pre>
+        <button v-if="procedure === 4" @click="saveContext">发送</button>
+    </div>
+
+    <br />
+
+    <div v-show="procedure >= 5">
+        <pre>第五步: 调用 {{this.getContextUrl}} 获取密文, 并使用客户端密钥进行解密</pre>
+        <pre>密文: </pre>
+        <pre>{{this.receptionCiphertext}}</pre>
+        <pre>字符串: </pre>
+        <pre>{{this.result}}</pre>
+        <button v-if="procedure === 5" @click="getContext">获取</button>
+    </div>
+
+</div>
+
+<script src="./js/vue.min.js"></script>
+<script src="./js/axios.min.js"></script>
+<script src="./js/jsencrypt.min.js"></script>
+<script src="./js/crypto-js.js"></script>
+
+<script>
+    const app = new Vue({
+        el: '#app',
+        data: {
+            procedure: 1,
+            getServerPublicKeyUrl: 'http://localhost:18080/getServerPublicKey',
+            ServerPublicKey: '',
+            secretKey: '',
+            iv: '',
+            clientSecretKey: '',
+            saveClientSecretKeyUrl: 'http://localhost:18080/saveClientSecretKey',
+            secretKeyId: '',
+            saveContextUrl: 'http://localhost:18080/saveContext',
+            sendCiphertext: '',
+            getContextUrl: 'http://localhost:18080/getContext',
+            receptionCiphertext: '',
+            result: ''
+        },
+        methods: {
+            getServerPublicKey() {
+                axios.get(this.getServerPublicKeyUrl)
+                .then((response) => {
+                    this.ServerPublicKey = response.data.data;
+                    this.procedure = 2;
+                })
+                .catch((error) => {
+                    console.log(error);
+                    alert("axios 异常");
+                })
+            },
+            generateRandomSecretKey() {
+                this.secretKey = this.randomKey(16);
+                this.iv = this.randomKey(16);
+                const encryptor = new JSEncrypt();
+                encryptor.setPublicKey(this.ServerPublicKey);
+                this.clientSecretKey = encryptor.encrypt(JSON.stringify({"secretKey": this.secretKey, "iv": this.iv}));
+               this.procedure = 3;
+            },
+            saveClientSecretKey() {
+                axios.post(this.saveClientSecretKeyUrl, this.clientSecretKey, {
+                    headers: {
+                        'Content-Type': 'application/json;charset=UTF-8'
+                    },
+                })
+                .then((response) => {
+                    this.secretKeyId = response.data.data;
+
+                    const key = CryptoJS.enc.Utf8.parse(this.secretKey);
+                    const iv = CryptoJS.enc.Utf8.parse(this.iv);
+                    const encrypted = CryptoJS.AES.encrypt("{\"context\":\"测试字符串!\"}", key, {
+                        iv: iv,
+                        mode: CryptoJS.mode.CBC,
+                        padding: CryptoJS.pad.Pkcs7
+                    });
+                    this.sendCiphertext = encrypted.toString();
+
+                    this.procedure = 4;
+                })
+                .catch((error) => {
+                    console.log(error);
+                    alert("axios 异常");
+                })
+            },
+            saveContext() {
+                axios.post(this.saveContextUrl, this.sendCiphertext, {
+                    headers: {
+                        'Content-Type': 'application/json;charset=UTF-8',
+                        'secretKeyId': this.secretKeyId,
+                    },
+                })
+                .then((response) => {
+                    this.procedure = 5;
+                })
+                .catch((error) => {
+                    console.log(error);
+                    alert("axios 异常");
+                })
+            },
+            getContext() {
+                axios.get(this.getContextUrl, {
+                    headers: {
+                        'secretKeyId': this.secretKeyId,
+                    },
+                })
+                .then((response) => {
+                    this.receptionCiphertext = response.data;
+
+                    const key = CryptoJS.enc.Utf8.parse(this.secretKey);
+                    const iv = CryptoJS.enc.Utf8.parse(this.iv);
+                    const decrypt = CryptoJS.AES.decrypt(this.receptionCiphertext, key, {
+                        iv: iv,
+                        mode: CryptoJS.mode.CBC,
+                        padding: CryptoJS.pad.Pkcs7
+                    });
+                    const decryptedStr = decrypt.toString(CryptoJS.enc.Utf8);
+                    this.result = decryptedStr.toString();
+
+                    this.procedure = 6;
+                })
+                .catch((error) => {
+                    console.log(error);
+                    alert("axios 异常");
+                })
+            },
+            randomKey(len) {
+                len = len || 16;
+                var chars = 'ABCDEFGHIJKMNOPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz0123456789';
+                var maxPos = chars.length;
+                var str = '';
+                for (i = 0; i < len; i++) {
+                    str += chars.charAt(Math.floor(Math.random() * maxPos));
+                }
+                return str;
+            }
+        }
+    })
+</script>
+</body>
+</html>
